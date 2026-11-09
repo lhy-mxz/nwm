@@ -1,0 +1,29 @@
+# Replace asset paths and poses with valid locations in your scene.
+scene: /path/to/scene.glb
+navmesh: /path/to/scene.navmesh
+start_pose: [0.0, 0.0, 0.0, 0.0] # floor x,y,z (meters), yaw (degrees); zero faces -Z
+goal_pose: [0.0, 0.0, -1.0, 0.0]
+max_goal_distance: 3.0
+radius: 0.1
+height: 0.5
+camera_height: 0.5
+hfov: 90
+forward_m: 0.25
+turn_deg: 15.0
+gpu: 0
+seed: 0
+model_config: config/nwm_cdit_xl.yaml
+checkpoint: logs/nwm_cdit_xl/checkpoints/0100000.pth.tar
+vae: stabilityai/sd-vae-ft-ema
+action_dataset: recon # selects training motion scale; requires empirical calibration
+frames_per_action: 1 # nominal training frame interval, NOT wall-clock inference time
+diffusion_steps: 50
+horizon: 3
+candidates: 24
+elites: 6
+cem_iterations: 3
+batch_size: 4
+max_steps: 60
+success_distance: 0.25
+success_angle_deg: 20
+output_dir: results/habitat_nav
