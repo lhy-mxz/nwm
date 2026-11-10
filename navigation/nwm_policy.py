@@ -20,12 +20,16 @@ class NWMPolicy:
         self.latent = model_cfg['image_size'] // 8
         if model_cfg['image_size'] != 224:
             raise ValueError('Current image preprocessing requires image_size=224')
+        print(f"Loading NWM checkpoint: {cfg['checkpoint']}", flush=True)
         model = CDiT_models[model_cfg['model']](input_size=self.latent, context_size=self.context)
         checkpoint = torch.load(cfg['checkpoint'], map_location='cpu', weights_only=False)
         model.load_state_dict(checkpoint['ema'], strict=True)
+        del checkpoint
         model.eval().to(self.device)
+        print(f"Loading VAE: {cfg['vae']}", flush=True)
         vae = AutoencoderKL.from_pretrained(cfg['vae']).eval().to(self.device)
         self.models = model, create_diffusion(str(cfg['diffusion_steps'])), vae
+        print('Loading LPIPS', flush=True)
         self.metric = lpips.LPIPS(net='alex').eval().to(self.device)
         self.spacing = data_cfg[cfg['action_dataset']]['metric_waypoint_spacing']
         self.minimum = np.array(data_cfg['action_stats']['min'])
@@ -42,20 +46,27 @@ class NWMPolicy:
         self.history = torch.cat([self.history[1:], frame[None]])
 
     @torch.no_grad()
+    def predict(self, history, actions):
+        """Predict one transition for each history; shared by probe and planner."""
+        a = np.asarray(actions)
+        if a.ndim != 1 or len(a) != history.shape[0] or not np.isin(a, [0, 1, 2]).all():
+            raise ValueError('One forward/left/right action is required per history')
+        xy = np.zeros((len(a), 2))
+        xy[a == 0, 0] = self.cfg['forward_m'] / self.spacing
+        xy = 2 * (xy - self.minimum) / (self.maximum - self.minimum) - 1
+        yaw = np.where(a == 1, 1., np.where(a == 2, -1., 0.)) * np.deg2rad(self.cfg['turn_deg'])
+        condition = torch.tensor(np.column_stack([xy, yaw]), dtype=torch.float32, device=self.device)[:, None]
+        return model_forward_wrapper(self.models, history, condition,
+            self.cfg['frames_per_action'], self.latent, self.device, self.context)
+
+    @torch.no_grad()
     def score(self, sequences):
         outputs = []
         for batch in range(0, len(sequences), self.cfg['batch_size']):
             actions = sequences[batch:batch + self.cfg['batch_size']]
             history = self.history[None].repeat(len(actions), 1, 1, 1, 1)
             for step in range(actions.shape[1]):
-                a = actions[:, step]
-                xy = np.zeros((len(a), 2))
-                xy[a == 0, 0] = self.cfg['forward_m'] / self.spacing
-                xy = 2 * (xy - self.minimum) / (self.maximum - self.minimum) - 1
-                yaw = np.where(a == 1, 1., np.where(a == 2, -1., 0.)) * np.deg2rad(self.cfg['turn_deg'])
-                condition = torch.tensor(np.column_stack([xy, yaw]), dtype=torch.float32, device=self.device)[:, None]
-                image = model_forward_wrapper(self.models, history, condition,
-                    self.cfg['frames_per_action'], self.latent, self.device, self.context)
+                image = self.predict(history, actions[:, step])
                 history = torch.cat([history[:, 1:], image[:, None]], dim=1)
             outputs.extend(self.metric(image.float(), self.goal.expand_as(image).float()).flatten().cpu().tolist())
         return np.array(outputs)

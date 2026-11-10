@@ -45,3 +45,16 @@ These commands do not start simulation or load models. Select zero-based `scene_
 The task uses the original `combos` target position as an **image-goal camera position**, not the original inspection endpoint. Goal angle in these files is a placeholder: this adapter defaults to the start camera's heading, with optional `goal_yaw_deg` override. This changes task semantics from inspection visibility to pose arrival. It does not reuse the inspection success labels or SPL reference lengths.
 
 The floor-height hint defaults to zero, matching source dataset generation; the adapter snaps positions to NavMesh only within `snap_tolerance` and checks connectivity and geodesic distance. List output gives straight-line distances only. Some original tasks exceed the default 3 m range; choose an appropriate episode or explicitly adjust the limit, rather than silently changing the selected task. Verify resolved paths first, then run the environment-only command when ready. Neither scene files nor actual dataset compatibility were validated in the cloud because the data are absent.
+
+## Model startup and controlled single-step comparison
+
+After the environment-only check succeeds, configure `checkpoint` to your existing NWM EMA file. `vae` accepts the Hugging Face model name or a local saved VAE directory. LPIPS may fetch AlexNet weights on first use. Keep your server's working dataset configuration.
+
+```bash
+python habitat_nav.py --config config/habitat_nav_sos.yaml --model-only
+python habitat_nav.py --config config/habitat_nav_sos.yaml --single-step forward --diffusion-steps 10 --output-dir results/probe_forward
+```
+
+Model-only loads NWM/VAE/LPIPS without importing Habitat or reading scene assets, but does not exercise forward inference. Single-step bypasses CEM and predicts exactly one configured primitive from repeated initial RGB, then executes that primitive in Habitat. `--single-step left` and `right` are also supported. Each invocation starts from the configured initial pose.
+
+Inspect `comparison.png` (initial / predicted / actual, same preprocessing), `actual_raw.png`, and `probe.json` (collision, actual translation, LPIPS, prediction timing and resolved configuration). Ten diffusion steps are for startup only; increase to 50 or the original 250 for qualitative comparisons. A collision makes commanded-motion prediction versus actual-motion comparison ambiguous. One stochastic sample and a synthetic repeated history do not establish navigation quality. These modes do not change the planner; migration back to the original continuous action search is still pending.

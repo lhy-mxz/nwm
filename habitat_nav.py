@@ -6,14 +6,37 @@ from pathlib import Path
 import yaml
 
 
+def load_policy(cfg):
+    import torch
+    torch.manual_seed(cfg['seed'])
+    from navigation.nwm_policy import NWMPolicy
+    return NWMPolicy(cfg, yaml.safe_load(Path(cfg['model_config']).read_text()),
+                     yaml.safe_load(Path('config/data_config.yaml').read_text()))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', default='config/habitat_nav.yaml')
-    parser.add_argument('--environment-only', action='store_true', help='Exercise forward/left/right without loading NWM')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--environment-only', action='store_true', help='Exercise forward/left/right without loading NWM')
+    modes.add_argument('--model-only', action='store_true', help='Load NWM, VAE and LPIPS without starting Habitat')
+    modes.add_argument('--single-step', choices=['forward', 'left', 'right'], help='Compare one NWM prediction with one real Habitat action; no CEM')
+    parser.add_argument('--output-dir', help='Override result directory')
+    parser.add_argument('--diffusion-steps', type=int, help='Override diffusion sampling steps')
     parser.add_argument('--list-episodes', action='store_true', help='List indexed sight-over-site tasks without loading Habitat or NWM')
     parser.add_argument('--resolve-episode', action='store_true', help='Print resolved scene paths and poses without starting simulation')
     args = parser.parse_args()
     cfg = yaml.safe_load(Path(args.config).read_text())
+    if args.output_dir:
+        cfg['output_dir'] = args.output_dir
+    if args.diffusion_steps is not None:
+        if not 1 <= args.diffusion_steps <= 1000:
+            parser.error('--diffusion-steps must be between 1 and 1000')
+        cfg['diffusion_steps'] = args.diffusion_steps
+    if args.model_only:
+        load_policy(cfg)
+        print('PASS: NWM, VAE and LPIPS loaded; inference not exercised', flush=True)
+        return
     from navigation.episodes import load_episode, list_episodes
     if args.list_episodes:
         list_episodes(cfg['sight_over_site'])
@@ -34,12 +57,12 @@ def main():
         Image.fromarray(goal).save(output / 'goal.png')
         Image.fromarray(rgb).save(output / 'initial.png')
         if not args.environment_only:
-            import torch
-            torch.manual_seed(cfg['seed'])
-            from navigation.nwm_policy import NWMPolicy
-            policy = NWMPolicy(cfg, yaml.safe_load(Path(cfg['model_config']).read_text()),
-                               yaml.safe_load(Path('config/data_config.yaml').read_text()))
+            policy = load_policy(cfg)
             policy.reset(rgb, goal)
+        if args.single_step:
+            from navigation.probe import run_probe
+            run_probe(env, policy, rgb, args.single_step, cfg, output)
+            return
         success = False
         limit = 3 if args.environment_only else cfg['max_steps']
         for step in range(limit):
