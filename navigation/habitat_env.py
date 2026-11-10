@@ -37,13 +37,23 @@ class HabitatEnv:
 
     def reset(self, start, goal):
         pf = self.sim.pathfinder
+        start, goal = list(start), list(goal)
+        if self.cfg.get('sight_over_site'):
+            for pose in (start, goal):
+                original = np.asarray(pose[:3], dtype=float)
+                snapped = np.asarray(pf.snap_point(original))
+                tolerance = self.cfg['sight_over_site'].get('snap_tolerance', .15)
+                if not np.isfinite(snapped).all() or np.linalg.norm(snapped - original) > tolerance:
+                    raise ValueError('Indexed pose cannot be snapped near floor_height_hint; check scene, NavMesh and coordinate settings')
+                pose[:3] = snapped.tolist()
+            self.cfg['start_pose'], self.cfg['goal_pose'] = start, goal
         for pose in (start, goal):
             if not pf.is_navigable(np.array(pose[:3])):
                 raise ValueError('Start and goal must be navigable floor positions')
         path = habitat_sim.ShortestPath()
         path.requested_start, path.requested_end = np.array(start[:3]), np.array(goal[:3])
         if not pf.find_path(path) or not 0 < path.geodesic_distance <= self.cfg['max_goal_distance']:
-            raise ValueError('Goal is unreachable, identical, or beyond max_goal_distance')
+            raise ValueError(f'Goal is unreachable, identical, or beyond max_goal_distance={self.cfg["max_goal_distance"]}; measured geodesic={path.geodesic_distance}. Select another indexed episode or deliberately adjust the distance limit.')
         self.goal = goal
         self.set_pose(goal)
         target = self.observe().copy()

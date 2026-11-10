@@ -10,8 +10,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', default='config/habitat_nav.yaml')
     parser.add_argument('--environment-only', action='store_true', help='Exercise forward/left/right without loading NWM')
+    parser.add_argument('--list-episodes', action='store_true', help='List indexed sight-over-site tasks without loading Habitat or NWM')
+    parser.add_argument('--resolve-episode', action='store_true', help='Print resolved scene paths and poses without starting simulation')
     args = parser.parse_args()
     cfg = yaml.safe_load(Path(args.config).read_text())
+    from navigation.episodes import load_episode, list_episodes
+    if args.list_episodes:
+        list_episodes(cfg['sight_over_site'])
+        return
+    cfg = load_episode(cfg)
+    if args.resolve_episode:
+        print(yaml.safe_dump(cfg, sort_keys=False))
+        return
     # Keep optional heavy dependencies out of CLI help.
     from navigation.habitat_env import HabitatEnv
     env = HabitatEnv(cfg)

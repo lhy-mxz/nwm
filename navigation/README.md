@@ -30,3 +30,18 @@ Each primitive becomes a local NWM condition: forward maps to positive local x, 
 This planner changes the original continuous CEM into categorical CEM so that imagined primitives are executable. It uses stochastic NWM samples, 50 diffusion steps by default, and terminal-image LPIPS only. Scores are noisy and there is no learned collision cost or guarantee of global navigation. Habitat performs collision filtering during actual movement. The environment reports ground-truth distance/yaw for evaluation only; the policy sees RGB and target RGB, not target coordinates. Success is environment-provided pose-threshold termination, not a learned STOP action. No SPL claim is made.
 
 Validate environment motion/collisions, then model-versus-rendered one-step predictions, before assessing full navigation. No pretrained or Habitat end-to-end validation has been performed in the CPU-only cloud workspace.
+
+## Existing sight-over-site indexed episodes
+
+Use `config/habitat_nav_sos.yaml` and set only `sight_over_site.data_dir` (directory of scene `.npz` files) and `sight_over_site.scenes_dir` (Gibson scene directory). Existing server data can be referenced in place. No datasets are bundled in this repository.
+
+```bash
+python habitat_nav.py --config config/habitat_nav_sos.yaml --list-episodes
+python habitat_nav.py --config config/habitat_nav_sos.yaml --resolve-episode
+```
+
+These commands do not start simulation or load models. Select zero-based `scene_index` (sorted NPZ filenames, as in the original evaluator) and `episode_index` (original `combos` index). The loader derives GLB/NavMesh paths from `scene_name`, and converts row/column positions using the original grid width, origin and 0.05 m cell size. It converts the stored start angle from radians with the original pi/2 orientation offset. Full manual poses remain supported by the original config.
+
+The task uses the original `combos` target position as an **image-goal camera position**, not the original inspection endpoint. Goal angle in these files is a placeholder: this adapter defaults to the start camera's heading, with optional `goal_yaw_deg` override. This changes task semantics from inspection visibility to pose arrival. It does not reuse the inspection success labels or SPL reference lengths.
+
+The floor-height hint defaults to zero, matching source dataset generation; the adapter snaps positions to NavMesh only within `snap_tolerance` and checks connectivity and geodesic distance. List output gives straight-line distances only. Some original tasks exceed the default 3 m range; choose an appropriate episode or explicitly adjust the limit, rather than silently changing the selected task. Verify resolved paths first, then run the environment-only command when ready. Neither scene files nor actual dataset compatibility were validated in the cloud because the data are absent.
