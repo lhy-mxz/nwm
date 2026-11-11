@@ -67,9 +67,49 @@ class HabitatEnv:
     def observe(self):
         return self.sim.get_sensor_observations()['rgb'][..., :3].copy()
 
+    def pose(self):
+        from habitat_sim.utils.common import quat_rotate_vector
+        state = self.sim.get_agent(0).get_state()
+        forward = quat_rotate_vector(state.rotation, np.array([0., 0., -1.]))
+        return np.asarray(state.position).copy(), float(np.arctan2(-forward[0], -forward[2]))
+
     def step(self, action):
+        if isinstance(action, dict):
+            return self.step_delta(action)
         result = self.sim.step(int(action))
         return result['rgb'][..., :3].copy(), bool(result.get('collided', False))
+
+    def step_delta(self, action):
+        """Kinematic local displacement with NavMesh filtering on every segment.
+
+        Allows lateral motion; not a wheeled robot controller. Rotation is applied
+        after translation, matching a relative-pose command in the pre-step frame.
+        """
+        from navigation.continuous import local_to_world
+        if action.get('kind') != 'local_delta':
+            raise ValueError('Unsupported continuous action')
+        values = [action[k] for k in ('forward_m', 'left_m', 'yaw_rad')]
+        if not np.isfinite(values).all():
+            raise ValueError('Non-finite continuous action')
+        position, yaw = self.pose()
+        delta = local_to_world(values[0], values[1], yaw)
+        segment_m = float(self.cfg.get('motion_segment_m', .05))
+        if segment_m <= 0:
+            raise ValueError('motion_segment_m must be positive')
+        count = max(1, int(np.ceil(np.linalg.norm(delta) / segment_m)))
+        collided = False
+        for _ in range(count):
+            requested = position + delta / count
+            permitted = np.asarray(self.sim.pathfinder.try_step_no_sliding(position, requested))
+            if not np.isfinite(permitted).all():
+                raise RuntimeError('NavMesh returned a non-finite position')
+            blocked = np.linalg.norm((permitted - requested)[[0, 2]]) > 1e-4
+            position = permitted
+            if blocked:
+                collided = True
+                break
+        self.set_pose(position.tolist() + [float(np.rad2deg(yaw + values[2]))])
+        return self.observe(), collided
 
     def errors(self):
         state = self.sim.get_agent(0).get_state()

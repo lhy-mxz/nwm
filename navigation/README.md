@@ -58,3 +58,53 @@ python habitat_nav.py --config config/habitat_nav_sos.yaml --single-step forward
 Model-only loads NWM/VAE/LPIPS without importing Habitat or reading scene assets, but does not exercise forward inference. Single-step bypasses CEM and predicts exactly one configured primitive from repeated initial RGB, then executes that primitive in Habitat. `--single-step left` and `right` are also supported. Each invocation starts from the configured initial pose.
 
 Inspect `comparison.png` (initial / predicted / actual, same preprocessing), `actual_raw.png`, and `probe.json` (collision, actual translation, LPIPS, prediction timing and resolved configuration). Ten diffusion steps are for startup only; increase to 50 or the original 250 for qualitative comparisons. A collision makes commanded-motion prediction versus actual-motion comparison ambiguous. One stochastic sample and a synthetic repeated history do not establish navigation quality. These modes do not change the planner; migration back to the original continuous action search is still pending.
+
+## Source-compatible Gaussian planning (opt-in)
+
+Set `planner: gaussian`, `cem_iterations: 1`, `elites >= 2`, and optionally
+`action_prior: config/data_hyperparams_plan.yaml`, `num_repeat_eval: 1`.
+The default remains `discrete` for old configs. `--planner gaussian` overrides
+that default; the single-step primitive probe remains unchanged.
+
+Gaussian mode reads the original dataset-specific `mu` and `var_scale` (used
+as standard deviations). It constructs constant normalized XY increments,
+heading-derived yaw increments and a final yaw perturbation exactly as
+`planning_eval.py`. It scores all candidates, updates mean/std from the elites'
+**final deltas**, and evaluates a final mean rollout without resampling from
+the updated distribution. The source's last-yaw update and subsequent pi
+multiplication are preserved, including their unusual unit convention.
+`num_repeat_eval` averages stochastic rollout scores; this implementation also
+averages the final rollout when repeats > 1. NumPy sampling and chunked model
+inference mean results are not bit-identical to the source's Torch/DDP RNG.
+
+Only the first final-mean delta is executed before replanning from real RGB.
+XY is unnormalized and scaled to meters with the selected dataset's waypoint
+spacing. +X is local forward, +Y is local left; yaw is radians. Habitat executes
+this relative-pose command kinematically, dividing the straight translation
+into <= `motion_segment_m` (default .05 m) segments, filtering **every** segment
+with `try_step_no_sliding`, then applying yaw. This permits lateral motion and
+is not a nonholonomic robot controller. It is not physics-based execution or a
+claim of collision-free swept-volume geometry. If translation is blocked,
+rotation still executes; the real resulting image updates the next decision.
+No clipping or goal-position reward is added to the original candidate scores.
+
+For a first run copy your working server config to a new file and use
+`planner: gaussian`, `candidates: 6`, `horizon: 2`, `elites: 2`,
+`cem_iterations: 1`, `num_repeat_eval: 1`, `max_steps: 5`.
+This adds one final rollout compared with scoring candidates alone. Later,
+`candidates: 120`, `horizon: 8`, `elites: 5`, `num_repeat_eval: 3` approaches the
+README's search budget (rollout stride remains 1). Reduced horizon changes the
+first-yaw behavior for horizon=1, so use horizon >=2 for initial comparisons.
+
+`result.json` now records positions, headings, actual translation, decision time
+and the Gaussian search trace. `steps.json` is refreshed after each executed step
+so progress survives later interruption. `trajectory.png` plots the actual X/Z
+path with heading arrows and collision markers; it is not an occupancy map.
+Source task labels and original SPL are not reused. The new execution adapter
+has CPU mock tests, but still requires real Habitat validation on your server.
+
+Before the first Gaussian run, execute `--continuous-check` with your working
+scene config and a new output directory. This does not load NWM: it commands
+forward `forward_m`, left .1 m, then positive yaw `turn_deg` to check continuous
+execution and trajectory logging. The left command is a lateral translation,
+not a left turn. Inspect collision reports and images before model-based use.
